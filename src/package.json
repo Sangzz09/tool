@@ -1,0 +1,14 @@
+{
+  "name": "tool-taixiu-ai-pro",
+  "version": "1.0.0",
+  "description": "AI Dự đoán Tài Xỉu nâng cao - phân tích cầu tự động",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "node-fetch": "^3.3.2"
+  }
+}
