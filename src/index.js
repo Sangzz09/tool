@@ -2,15 +2,19 @@ import express from "express";
 import axios from "axios";
 import sqlite3 from "sqlite3";
 import { open } from "sqlite";
+import fs from "fs";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ======= DATABASE SQLITE =======
+// ======= THƯ MỤC LƯU DB =======
+if (!fs.existsSync("./data")) fs.mkdirSync("./data");
+
+// ======= INIT SQLITE =======
 let db;
 async function initDB() {
   db = await open({
-    filename: "./data.sqlite",
+    filename: "./data/data.sqlite",
     driver: sqlite3.Database
   });
 
@@ -27,9 +31,21 @@ async function initDB() {
       thoiGian TEXT
     )
   `);
+  console.log("✅ DB ready");
 }
 
-await initDB();
+// reconnect DB nếu cần
+async function getDB() {
+  try {
+    if (!db) await initDB();
+    await db.get("SELECT 1");
+    return db;
+  } catch(e){
+    console.error("❌ DB disconnected, reconnecting...");
+    await initDB();
+    return db;
+  }
+}
 
 // ======= DANH SÁCH CẦU HITCLUB =======
 const dsCau = [
@@ -70,23 +86,24 @@ async function layDuLieuGoc() {
 
 // ======= XÁC ĐỊNH LOẠI CẦU =======
 async function xacDinhLoaiCau() {
+  const db = await getDB();
   const last10 = await db.all(`SELECT loaiCau FROM lichSu ORDER BY id DESC LIMIT 10`);
   if (!last10.length) return dsCau[Math.floor(Math.random() * dsCau.length)];
-
   const dem = {};
-  last10.forEach(r => dem[r.loaiCau] = (dem[r.loaiCau] || 0) + 1);
+  last10.forEach(r => dem[r.loaiCau] = (dem[r.loaiCau]||0)+1);
   const sorted = Object.entries(dem).sort((a,b)=>b[1]-a[1]);
   return sorted[0][0];
 }
 
 // ======= MACHINE LEARNING NÂNG CAO =======
 async function machineLearningML(loaiCau) {
+  const db = await getDB();
   const lichSuCau = await db.all(`SELECT ket_qua FROM lichSu WHERE loaiCau=? ORDER BY id DESC LIMIT 50`, [loaiCau]);
-  if (lichSuCau.length < 3) return {duDoan: Math.random() > 0.5 ? "Tai":"Xiu", doTinCay:"50%"};
+  if (lichSuCau.length < 3) return {duDoan: Math.random()>"0.5"?"Tai":"Xiu", doTinCay:"50%"};
 
   const pattern = lichSuCau.map(r=>r.ket_qua==="Tai"?"t":"x").join("");
   const last3 = pattern.slice(-3);
-  let countT=0, countX=0;
+  let countT=0,countX=0;
 
   for(let i=0;i<=pattern.length-4;i++){
     if(pattern.slice(i,i+3)===last3){
@@ -108,15 +125,17 @@ async function machineLearningML(loaiCau) {
   return {duDoan, doTinCay};
 }
 
-// ======= CẬP NHẬT LỊCH SỬ & THỐNG KÊ =======
+// ======= CẬP NHẬT LỊCH SỬ =======
 async function capNhatLichSu(data, loaiCau) {
+  const db = await getDB();
   const {duDoan, doTinCay} = await machineLearningML(loaiCau);
   const ketQua = data.ket_qua;
 
-  await db.run(`
-    INSERT INTO lichSu (phien,xuc_xac,tong,ket_qua,duDoan,loaiCau,doTinCay,thoiGian)
-    VALUES (?,?,?,?,?,?,?,?)
-  `, [data.phien, data.xuc_xac, data.tong, ketQua, duDoan, loaiCau, doTinCay, new Date().toISOString()]);
+  await db.run(
+    `INSERT INTO lichSu (phien,xuc_xac,tong,ket_qua,duDoan,loaiCau,doTinCay,thoiGian)
+     VALUES (?,?,?,?,?,?,?,?)`,
+    [data.phien,data.xuc_xac,data.tong,ketQua,duDoan,loaiCau,doTinCay,new Date().toISOString()]
+  );
 
   const soPhienDuDoan = await db.get(`SELECT COUNT(*) as cnt FROM lichSu`);
   const soDung = await db.get(`SELECT COUNT(*) as cnt FROM lichSu WHERE duDoan=ket_qua`);
@@ -150,8 +169,65 @@ app.get("/api/taixiu", async (req,res)=>{
 
 // ======= API XEM LỊCH SỬ =======
 app.get("/api/lichsu", async (req,res)=>{
-  const lichSuAll = await db.all(`SELECT * FROM lichSu ORDER BY id DESC`);
-  res.json({tongPhien: lichSuAll.length, lichSu: lichSuAll});
+  try{
+    const db = await getDB();
+    const lichSuAll = await db.all(`SELECT * FROM lichSu ORDER BY id DESC`);
+    res.json({tongPhien: lichSuAll.length, lichSu: lichSuAll});
+  }catch(e){
+    console.error("❌ Lỗi DB:", e.message);
+    res.status(500).json({error:"DB chưa sẵn sàng"});
+  }
 });
 
-app.listen(PORT,"0.0.0.0",()=>console.log(`🚀 Server chạy tại http://localhost:${PORT}`));
+// ======= API XEM DỰ ĐOÁN TỪNG LOẠI CẦU =======
+app.get("/api/cau", async (req,res)=>{
+  try{
+    const db = await getDB();
+    const result = [];
+
+    for(const loaiCau of dsCau){
+      // Lấy dự đoán ML cho từng cầu
+      const lichSuCau = await db.all(`SELECT ket_qua FROM lichSu WHERE loaiCau=? ORDER BY id DESC LIMIT 50`, [loaiCau]);
+      let duDoan, doTinCay;
+
+      if(lichSuCau.length<3){
+        duDoan = Math.random() > 0.5 ? "Tai" : "Xiu";
+        doTinCay = "50%";
+      } else {
+        const pattern = lichSuCau.map(r=>r.ket_qua==="Tai"?"t":"x").join("");
+        const last3 = pattern.slice(-3);
+        let countT=0, countX=0;
+        for(let i=0;i<=pattern.length-4;i++){
+          if(pattern.slice(i,i+3)===last3){
+            const next = pattern[i+3];
+            if(next==="t") countT++;
+            if(next==="x") countX++;
+          }
+        }
+        if(countT+countX===0){
+          duDoan = pattern.endsWith("t")?"Tai":"Xiu";
+          doTinCay = "60%";
+        } else {
+          duDoan = countT>=countX?"Tai":"Xiu";
+          doTinCay = Math.floor(Math.max(countT,countX)/(countT+countX)*100)+"%";
+        }
+      }
+
+      result.push({loaiCau, du_doan: duDoan, do_tin_cay: doTinCay});
+    }
+
+    res.json(result);
+  } catch(e){
+    console.error("❌ Lỗi API /api/cau:", e.message);
+    res.status(500).json({error:"DB chưa sẵn sàng"});
+  }
+});
+
+// ======= KEEP ALIVE PING =======
+setInterval(()=>axios.get(`http://localhost:${PORT}/api/taixiu`).catch(()=>{}),5*60*1000);
+
+// ======= CHẠY SERVER =======
+app.listen(PORT,"0.0.0.0",async ()=>{
+  await initDB();
+  console.log(`🚀 Server chạy tại http://localhost:${PORT}`);
+});
