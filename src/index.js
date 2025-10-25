@@ -234,7 +234,7 @@ app.get("/api/taixiu", async (req, res) => {
       so_phien_du_doan: stats.total,
       so_dung: stats.correct,
       so_sai: stats.wrong,
-      dev: "@minhsang_ai_pro_max"
+      dev: "@minhsangdangcap"
     });
   } catch (err) {
     return res.status(500).json({ error: "Server lỗi nội bộ", chi_tiet: err.message });
