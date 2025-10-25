@@ -1,14 +1,14 @@
 {
-  "name": "tool-taixiu-ai-pro",
+  "name": "taixiu-api",
   "version": "1.0.0",
-  "description": "AI Dự đoán Tài Xỉu nâng cao",
+  "description": "API dự đoán Tài Xỉu HitClub",
   "main": "index.js",
   "type": "module",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "express": "^4.19.2",
-    "node-fetch": "^3.3.2"
+    "axios": "^1.6.0",
+    "express": "^4.18.2"
   }
 }
