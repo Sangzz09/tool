@@ -1,18 +1,35 @@
 import express from "express";
 import axios from "axios";
-import fs from "fs";
+import sqlite3 from "sqlite3";
+import { open } from "sqlite";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const FILE_DATA = "./data.json";
 
-// ======= THỐNG KÊ =======
-let thongKe = {
-  soPhienDuDoan: 0,
-  soDung: 0,
-  soSai: 0,
-  pattern: ""
-};
+// ======= DATABASE SQLITE =======
+let db;
+async function initDB() {
+  db = await open({
+    filename: "./data.sqlite",
+    driver: sqlite3.Database
+  });
+
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS lichSu (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      phien TEXT,
+      xuc_xac TEXT,
+      tong INTEGER,
+      ket_qua TEXT,
+      duDoan TEXT,
+      loaiCau TEXT,
+      doTinCay TEXT,
+      thoiGian TEXT
+    )
+  `);
+}
+
+await initDB();
 
 // ======= DANH SÁCH CẦU HITCLUB =======
 const dsCau = [
@@ -31,21 +48,7 @@ const dsCau = [
   "Cầu random hitclub #59","Cầu random hitclub #60"
 ];
 
-// ======= LỊCH SỬ =======
-let lichSu = [];
-try {
-  if (fs.existsSync(FILE_DATA)) {
-    lichSu = JSON.parse(fs.readFileSync(FILE_DATA, "utf8"));
-    thongKe.soPhienDuDoan = lichSu.length;
-    thongKe.soDung = lichSu.filter(r => r.duDoan === r.ket_qua).length;
-    thongKe.soSai = lichSu.filter(r => r.duDoan !== r.ket_qua).length;
-    thongKe.pattern = lichSu.map(r => (r.ket_qua === "Tai" ? "t" : "x")).join("");
-  }
-} catch (err) {
-  console.error("❌ Lỗi load data.json:", err.message);
-}
-
-// ======= LẤY DỮ LIỆU GỐC HITCLUB (FALLBACK KHI LỖI) =======
+// ======= LẤY DỮ LIỆU GỐC HITCLUB =======
 async function layDuLieuGoc() {
   try {
     const { data } = await axios.get("https://hitclub-all-ban-o5ir.onrender.com/api/taixiu", {
@@ -55,7 +58,7 @@ async function layDuLieuGoc() {
     if (!data || !data.ket_qua) throw new Error("API không hợp lệ");
     return data;
   } catch (e) {
-    console.error("❌ Lỗi API, dùng fallback:", e.message);
+    console.error("❌ Lỗi API, fallback:", e.message);
     return {
       phien: Date.now(),
       xuc_xac: "1 - 2 - 3",
@@ -66,69 +69,60 @@ async function layDuLieuGoc() {
 }
 
 // ======= XÁC ĐỊNH LOẠI CẦU =======
-function xacDinhLoaiCau() {
-  if (lichSu.length === 0) return dsCau[Math.floor(Math.random() * dsCau.length)];
-  const last10 = lichSu.slice(-10).map(r => r.loaiCau);
+async function xacDinhLoaiCau() {
+  const last10 = await db.all(`SELECT loaiCau FROM lichSu ORDER BY id DESC LIMIT 10`);
+  if (!last10.length) return dsCau[Math.floor(Math.random() * dsCau.length)];
+
   const dem = {};
-  last10.forEach(c => dem[c] = (dem[c] || 0) + 1);
-  const sorted = Object.entries(dem).sort((a,b) => b[1]-a[1]);
-  return sorted[0] ? sorted[0][0] : dsCau[Math.floor(Math.random() * dsCau.length)];
+  last10.forEach(r => dem[r.loaiCau] = (dem[r.loaiCau] || 0) + 1);
+  const sorted = Object.entries(dem).sort((a,b)=>b[1]-a[1]);
+  return sorted[0][0];
 }
 
 // ======= MACHINE LEARNING NÂNG CAO =======
-function machineLearningML(loaiCau) {
-  const lichSuCau = lichSu.filter(r => r.loaiCau === loaiCau);
+async function machineLearningML(loaiCau) {
+  const lichSuCau = await db.all(`SELECT ket_qua FROM lichSu WHERE loaiCau=? ORDER BY id DESC LIMIT 50`, [loaiCau]);
   if (lichSuCau.length < 3) return {duDoan: Math.random() > 0.5 ? "Tai":"Xiu", doTinCay:"50%"};
 
   const pattern = lichSuCau.map(r=>r.ket_qua==="Tai"?"t":"x").join("");
-  const last3 = pattern.slice(-3); // pattern 3 ký tự gần nhất
-  let countT = 0, countX = 0;
+  const last3 = pattern.slice(-3);
+  let countT=0, countX=0;
 
-  for(let i=0; i<=pattern.length-4; i++){
+  for(let i=0;i<=pattern.length-4;i++){
     if(pattern.slice(i,i+3)===last3){
-      const next = pattern[i+3];
+      const next=pattern[i+3];
       if(next==="t") countT++;
       if(next==="x") countX++;
     }
   }
 
   let duDoan, doTinCay;
-  if(countT + countX === 0){
-    duDoan = pattern.endsWith("t") ? "Tai":"Xiu";
+  if(countT+countX===0){
+    duDoan = pattern.endsWith("t")?"Tai":"Xiu";
     doTinCay = "60%";
   } else {
-    duDoan = countT >= countX ? "Tai":"Xiu";
+    duDoan = countT>=countX?"Tai":"Xiu";
     doTinCay = Math.floor(Math.max(countT,countX)/(countT+countX)*100)+"%";
   }
 
   return {duDoan, doTinCay};
 }
 
-// ======= CẬP NHẬT JSON & THỐNG KÊ =======
-function capNhatLichSu(data, loaiCau) {
-  const {duDoan, doTinCay} = machineLearningML(loaiCau);
+// ======= CẬP NHẬT LỊCH SỬ & THỐNG KÊ =======
+async function capNhatLichSu(data, loaiCau) {
+  const {duDoan, doTinCay} = await machineLearningML(loaiCau);
   const ketQua = data.ket_qua;
 
-  const item = {
-    phien: data.phien,
-    xuc_xac: data.xuc_xac,
-    tong: data.tong,
-    ket_qua: ketQua,
-    duDoan,
-    loaiCau,
-    doTinCay,
-    thoiGian: new Date().toISOString()
-  };
+  await db.run(`
+    INSERT INTO lichSu (phien,xuc_xac,tong,ket_qua,duDoan,loaiCau,doTinCay,thoiGian)
+    VALUES (?,?,?,?,?,?,?,?)
+  `, [data.phien, data.xuc_xac, data.tong, ketQua, duDoan, loaiCau, doTinCay, new Date().toISOString()]);
 
-  lichSu.push(item);
-  if (lichSu.length > 50) lichSu = lichSu.slice(-50);
-
-  thongKe.soPhienDuDoan = lichSu.length;
-  thongKe.soDung = lichSu.filter(r => r.duDoan === r.ket_qua).length;
-  thongKe.soSai = lichSu.filter(r => r.duDoan !== r.ket_qua).length;
-  thongKe.pattern = lichSu.map(r => (r.ket_qua==="Tai"?"t":"x")).join("");
-
-  fs.writeFileSync(FILE_DATA, JSON.stringify(lichSu, null, 2));
+  const soPhienDuDoan = await db.get(`SELECT COUNT(*) as cnt FROM lichSu`);
+  const soDung = await db.get(`SELECT COUNT(*) as cnt FROM lichSu WHERE duDoan=ket_qua`);
+  const soSai = await db.get(`SELECT COUNT(*) as cnt FROM lichSu WHERE duDoan!=ket_qua`);
+  const patternArr = await db.all(`SELECT ket_qua FROM lichSu ORDER BY id ASC`);
+  const pattern = patternArr.map(r=>r.ket_qua==="Tai"?"t":"x").join("");
 
   return {
     phien: data.phien,
@@ -138,10 +132,10 @@ function capNhatLichSu(data, loaiCau) {
     du_doan: duDoan,
     do_tin_cay: doTinCay,
     loai_cau: loaiCau,
-    pattern: thongKe.pattern,
-    so_phien_du_doan: thongKe.soPhienDuDoan,
-    so_dung: thongKe.soDung,
-    so_sai: thongKe.soSai,
+    pattern,
+    so_phien_du_doan: soPhienDuDoan.cnt,
+    so_dung: soDung.cnt,
+    so_sai: soSai.cnt,
     dev: "@minhsangdangcap"
   };
 }
@@ -149,14 +143,15 @@ function capNhatLichSu(data, loaiCau) {
 // ======= API DỰ ĐOÁN =======
 app.get("/api/taixiu", async (req,res)=>{
   const data = await layDuLieuGoc();
-  const loaiCau = xacDinhLoaiCau();
-  const ketQua = capNhatLichSu(data, loaiCau);
+  const loaiCau = await xacDinhLoaiCau();
+  const ketQua = await capNhatLichSu(data, loaiCau);
   res.json(ketQua);
 });
 
 // ======= API XEM LỊCH SỬ =======
-app.get("/api/lichsu",(req,res)=>{
-  res.json({tongPhien: lichSu.length, lichSu});
+app.get("/api/lichsu", async (req,res)=>{
+  const lichSuAll = await db.all(`SELECT * FROM lichSu ORDER BY id DESC`);
+  res.json({tongPhien: lichSuAll.length, lichSu: lichSuAll});
 });
 
 app.listen(PORT,"0.0.0.0",()=>console.log(`🚀 Server chạy tại http://localhost:${PORT}`));
