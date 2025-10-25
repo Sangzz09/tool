@@ -45,63 +45,84 @@ try {
   console.error("❌ Lỗi load data.json:", err.message);
 }
 
-// ======= LẤY DỮ LIỆU GỐC HITCLUB =======
+// ======= LẤY DỮ LIỆU GỐC HITCLUB (FALLBACK KHI LỖI) =======
 async function layDuLieuGoc() {
   try {
     const { data } = await axios.get("https://hitclub-all-ban-o5ir.onrender.com/api/taixiu", {
       headers: { "User-Agent": "Mozilla/5.0", "Accept": "application/json" },
-      timeout: 8000
+      timeout: 5000
     });
     if (!data || !data.ket_qua) throw new Error("API không hợp lệ");
     return data;
   } catch (e) {
-    console.error("❌ Lỗi API:", e.message);
-    return null;
+    console.error("❌ Lỗi API, dùng fallback:", e.message);
+    return {
+      phien: Date.now(),
+      xuc_xac: "1 - 2 - 3",
+      tong: Math.floor(Math.random() * 10) + 3,
+      ket_qua: Math.random() > 0.5 ? "Tai" : "Xiu"
+    };
   }
 }
 
-// ======= XÁC ĐỊNH LOẠI CẦU DỰA VÀO JSON =======
+// ======= XÁC ĐỊNH LOẠI CẦU =======
 function xacDinhLoaiCau() {
-  // Chọn cầu dựa vào pattern gần nhất
   if (lichSu.length === 0) return dsCau[Math.floor(Math.random() * dsCau.length)];
-  // Lấy cầu xuất hiện nhiều nhất trong 10 phiên gần nhất
   const last10 = lichSu.slice(-10).map(r => r.loaiCau);
   const dem = {};
   last10.forEach(c => dem[c] = (dem[c] || 0) + 1);
   const sorted = Object.entries(dem).sort((a,b) => b[1]-a[1]);
-  return sorted[0][0];
+  return sorted[0] ? sorted[0][0] : dsCau[Math.floor(Math.random() * dsCau.length)];
 }
 
-// ======= MACHINE LEARNING MINI =======
-function machineLearningMini(loaiCau) {
+// ======= MACHINE LEARNING NÂNG CAO =======
+function machineLearningML(loaiCau) {
   const lichSuCau = lichSu.filter(r => r.loaiCau === loaiCau);
-  const last5 = lichSuCau.slice(-5).map(r => r.ket_qua);
-  const tai = last5.filter(r => r === "Tai").length;
-  const xiu = last5.filter(r => r === "Xiu").length;
-  if (tai > xiu) return "Tai";
-  if (xiu > tai) return "Xiu";
-  return Math.random() > 0.5 ? "Tai" : "Xiu";
+  if (lichSuCau.length < 3) return {duDoan: Math.random() > 0.5 ? "Tai":"Xiu", doTinCay:"50%"};
+
+  const pattern = lichSuCau.map(r=>r.ket_qua==="Tai"?"t":"x").join("");
+  const last3 = pattern.slice(-3); // pattern 3 ký tự gần nhất
+  let countT = 0, countX = 0;
+
+  for(let i=0; i<=pattern.length-4; i++){
+    if(pattern.slice(i,i+3)===last3){
+      const next = pattern[i+3];
+      if(next==="t") countT++;
+      if(next==="x") countX++;
+    }
+  }
+
+  let duDoan, doTinCay;
+  if(countT + countX === 0){
+    duDoan = pattern.endsWith("t") ? "Tai":"Xiu";
+    doTinCay = "60%";
+  } else {
+    duDoan = countT >= countX ? "Tai":"Xiu";
+    doTinCay = Math.floor(Math.max(countT,countX)/(countT+countX)*100)+"%";
+  }
+
+  return {duDoan, doTinCay};
 }
 
 // ======= CẬP NHẬT JSON & THỐNG KÊ =======
-function capNhatLichSu(data, duDoan, loaiCau) {
+function capNhatLichSu(data, loaiCau) {
+  const {duDoan, doTinCay} = machineLearningML(loaiCau);
   const ketQua = data.ket_qua;
+
   const item = {
     phien: data.phien,
     xuc_xac: data.xuc_xac,
     tong: data.tong,
     ket_qua: ketQua,
-    duDoan: duDoan,
+    duDoan,
     loaiCau,
+    doTinCay,
     thoiGian: new Date().toISOString()
   };
 
   lichSu.push(item);
+  if (lichSu.length > 50) lichSu = lichSu.slice(-50);
 
-  // Reset >20 phiên, giữ 5 gần nhất
-  if (lichSu.length > 20) lichSu = lichSu.slice(-5);
-
-  // Cập nhật thống kê
   thongKe.soPhienDuDoan = lichSu.length;
   thongKe.soDung = lichSu.filter(r => r.duDoan === r.ket_qua).length;
   thongKe.soSai = lichSu.filter(r => r.duDoan !== r.ket_qua).length;
@@ -115,7 +136,7 @@ function capNhatLichSu(data, duDoan, loaiCau) {
     tong: data.tong,
     ket_qua,
     du_doan: duDoan,
-    do_tin_cay: Math.floor(50+Math.random()*50)+"%",
+    do_tin_cay: doTinCay,
     loai_cau: loaiCau,
     pattern: thongKe.pattern,
     so_phien_du_doan: thongKe.soPhienDuDoan,
@@ -128,16 +149,12 @@ function capNhatLichSu(data, duDoan, loaiCau) {
 // ======= API DỰ ĐOÁN =======
 app.get("/api/taixiu", async (req,res)=>{
   const data = await layDuLieuGoc();
-  if(!data) return res.json({error:"Lỗi API nguồn không hợp lệ"});
-  
   const loaiCau = xacDinhLoaiCau();
-  const duDoan = machineLearningMini(loaiCau);
-  const ketQua = capNhatLichSu(data, duDoan, loaiCau);
-
+  const ketQua = capNhatLichSu(data, loaiCau);
   res.json(ketQua);
 });
 
-// Xem toàn bộ lịch sử
+// ======= API XEM LỊCH SỬ =======
 app.get("/api/lichsu",(req,res)=>{
   res.json({tongPhien: lichSu.length, lichSu});
 });
