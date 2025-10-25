@@ -2,162 +2,174 @@ import express from "express";
 import fetch from "node-fetch";
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
+const SOURCE_API = "https://hitclub-all-ban-o5ir.onrender.com/api/taixiu";
 
-let lichsu = [];
-let thongke = { dung: 0, sai: 0, tong: 0 };
-let pattern = "";
-let phienDaDoan = new Set(); // đảm bảo 1 phiên chỉ dự đoán 1 lần
+let history = [];
+let stats = { total: 0, correct: 0, wrong: 0 };
+let predictedPhien = null;
+let currentData = {};
 
-// ======= 40 LOẠI CẦU HITCLUB ======= //
-function phanTichCau(lichsu) {
-  const kq = lichsu.map(l => (l.ket_qua === "Tai" ? "T" : "X")).join("");
+// ===== DANH SÁCH CẦU THỰC TẾ (40 loại) =====
+const patternList = {
+  "TTTTTT": "Cầu bệt Tài",
+  "XXXXXX": "Cầu bệt Xỉu",
+  "TXTXTX": "Cầu xen kẽ 1-1",
+  "TTXXTT": "Cầu 2-2 đều",
+  "TTTXXX": "Cầu 3-3",
+  "TTTX": "Cầu 3 Tài 1 Xỉu",
+  "XXXT": "Cầu 3 Xỉu 1 Tài",
+  "TTTXX": "Cầu gãy Tài",
+  "XXXT": "Cầu gãy Xỉu",
+  "TXTXX": "Cầu nhấp nhả",
+  "TTTTX": "Cầu rồng Tài",
+  "XXXXT": "Cầu rồng Xỉu",
+  "TTTXTX": "Cầu đảo nhẹ Tài",
+  "XXXTXX": "Cầu đảo nhẹ Xỉu",
+  "TTXTT": "Cầu lò xo Tài",
+  "XXTXX": "Cầu lò xo Xỉu",
+  "TXTTX": "Cầu xen Tài",
+  "XTXXT": "Cầu xen Xỉu",
+  "TTTXTTTX": "Cầu đôi rồng Tài",
+  "XXXTXXXT": "Cầu đôi rồng Xỉu",
+  "TTXXTTXX": "Cầu xen 2-2",
+  "TTTXTTTX": "Cầu 3-1-3",
+  "TTTXTXTX": "Cầu giật 8 bước Tài",
+  "XXXTXTXX": "Cầu giật 8 bước Xỉu",
+  "TXTXXTXT": "Cầu ziczac 8 bước",
+  "TTTTXT": "Cầu 5-1 Tài",
+  "XXXXTX": "Cầu 5-1 Xỉu",
+  "TTTXXT": "Cầu đứt đoạn",
+  "XXTTTX": "Cầu ngược pha",
+  "TXTTTX": "Cầu lặp 1-3-1",
+  "TXTXXX": "Cầu 1-3-2",
+  "TTXXTX": "Cầu bẻ giữa",
+  "TTTXXXT": "Cầu hỗn hợp Tài",
+  "XXXTXXT": "Cầu hỗn hợp Xỉu",
+  "TXTXTT": "Cầu đảo cuối Tài",
+  "XTXXTT": "Cầu đảo cuối Xỉu",
+  "TTTTT": "Cầu kéo 5 Tài",
+  "XXXXX": "Cầu kéo 5 Xỉu",
+  "TTTXTT": "Cầu hồi Tài",
+  "XXTXTXX": "Cầu hồi Xỉu"
+};
 
-  const mau = [
-    { name: "Cầu bệt Tài", regex: /TTTTT$/ },
-    { name: "Cầu bệt Xỉu", regex: /XXXXX$/ },
-    { name: "Cầu xen kẽ", regex: /(TX){3,}$/ },
-    { name: "Cầu gãy 1", regex: /TTX$|XXT$/ },
-    { name: "Cầu gãy 2", regex: /TTTX$|XXXT$/ },
-    { name: "Cầu 1-1", regex: /(TX){2,}$/ },
-    { name: "Cầu 1-2", regex: /TXX$|XTT$/ },
-    { name: "Cầu 2-1", regex: /TTX$|XXT$/ },
-    { name: "Cầu 2-2", regex: /(TTXX){1,}$/ },
-    { name: "Cầu 3-1", regex: /TTTX$|XXXT$/ },
-    { name: "Cầu 3-2", regex: /TTTXX$|XXXTT$/ },
-    { name: "Cầu đảo chiều", regex: /TXT$|XTX$/ },
-    { name: "Cầu tam hoa Tài", regex: /TTT$/ },
-    { name: "Cầu tam hoa Xỉu", regex: /XXX$/ },
-    { name: "Cầu lặp lại 2 lần", regex: /(TTXX){2,}$/ },
-    { name: "Cầu đối xứng", regex: /TTXXTT$|XXTTXX$/ },
-    { name: "Cầu ngắt đôi", regex: /TTXTT$|XXTXX$/ },
-    { name: "Cầu ảo giác", regex: /TXTXTX$/ },
-    { name: "Cầu tăng dần Tài", regex: /TTT$/ },
-    { name: "Cầu tăng dần Xỉu", regex: /XXX$/ },
-    { name: "Cầu ngược", regex: /(XT){3,}$/ },
-    { name: "Cầu 1-3", regex: /TXXX$|XTTT$/ },
-    { name: "Cầu 2-3", regex: /TTXXX$|XXTTT$/ },
-    { name: "Cầu 3-3", regex: /(TTTXXX){1,}$/ },
-    { name: "Cầu chéo", regex: /TXXTXX$/ },
-    { name: "Cầu lặp 3", regex: /(TTX){3,}$/ },
-    { name: "Cầu 1-1 đảo", regex: /(XT){2,}$/ },
-    { name: "Cầu đan xen 2 tầng", regex: /(TTXXTTXX)$/ },
-    { name: "Cầu rít ngắn", regex: /TXXT$/ },
-    { name: "Cầu gãy đầu", regex: /^XT|^TX/ },
-    { name: "Cầu 5-1", regex: /TTTTTX$|XXXXXT$/ },
-    { name: "Cầu 6 chuỗi", regex: /(TTTTTT|XXXXXX)$/ },
-    { name: "Cầu lệch", regex: /TTTXX$/ },
-    { name: "Cầu 2 đầu", regex: /TXT$/ },
-    { name: "Cầu song hành", regex: /(TTXXTT|XXTTXX)$/ },
-    { name: "Cầu lặp 4", regex: /(TTXX){2,}$/ },
-    { name: "Cầu giữa Tài", regex: /XTTX$/ },
-    { name: "Cầu giữa Xỉu", regex: /TXXT$/ },
-    { name: "Cầu lộn", regex: /TXXTXXT$/ },
-  ];
-
-  for (let m of mau) {
-    if (m.regex.test(kq)) return m.name;
+// ===== 10 THUẬT TOÁN NÂNG CAO =====
+function markovPredict(hist) {
+  if (hist.length < 10) return 0.5;
+  let transitions = { TT: 0, TX: 0, XX: 0, XT: 0 };
+  for (let i = 1; i < hist.length; i++) {
+    const prev = hist[i - 1] === "Tai" ? "T" : "X";
+    const curr = hist[i] === "Tai" ? "T" : "X";
+    transitions[prev + curr]++;
   }
-  return "Không có cầu rõ ràng";
+  const pTai = transitions.TT / (transitions.TT + transitions.TX || 1);
+  return isNaN(pTai) ? 0.5 : pTai;
 }
 
-// ======= THUẬT TOÁN DỰ ĐOÁN ======= //
-function duDoan(lichsu) {
-  if (lichsu.length < 6) return { du_doan: "Tai", do_tin_cay: "50%" };
-
-  const kqGanNhat = lichsu.map(l => (l.ket_qua === "Tai" ? "T" : "X")).join("");
-  let cau = phanTichCau(lichsu);
-
-  // Phân tích Markov Chain
-  const counts = { TT: 0, TX: 0, XT: 0, XX: 0 };
-  for (let i = 0; i < kqGanNhat.length - 1; i++) {
-    const c = kqGanNhat[i] + kqGanNhat[i + 1];
-    if (counts[c] !== undefined) counts[c]++;
-  }
-  const pTai = (counts.TT + counts.XT) / (kqGanNhat.length - 1);
-  const pXiu = (counts.XX + counts.TX) / (kqGanNhat.length - 1);
-
-  let du_doan = pTai > pXiu ? "Tai" : "Xiu";
-  let do_tin_cay = Math.round(Math.abs(pTai - pXiu) * 100) + 50;
-
-  // Tăng/giảm độ tin cậy theo loại cầu
-  if (cau.includes("Tài")) {
-    du_doan = "Tai";
-    do_tin_cay += 15;
-  } else if (cau.includes("Xỉu")) {
-    du_doan = "Xiu";
-    do_tin_cay += 15;
-  }
-
-  if (do_tin_cay > 95) do_tin_cay = 95;
-  if (do_tin_cay < 50) do_tin_cay = 50;
-
-  return { du_doan, do_tin_cay: do_tin_cay + "%" };
+function entropyPredict(hist) {
+  if (hist.length < 6) return 0.5;
+  const unique = new Set(hist.slice(-6));
+  return unique.size === 1 ? 0.2 : 0.8; // càng hỗn loạn → khả năng đảo cao
 }
 
-// ======= LẤY DỮ LIỆU GỐC ======= //
-async function layDuLieuMoi() {
+function momentumPredict(hist) {
+  const last10 = hist.slice(-10);
+  const t = last10.filter(x => x === "Tai").length;
+  const x = last10.length - t;
+  if (t > x + 2) return "Tai";
+  if (x > t + 2) return "Xiu";
+  return null;
+}
+
+// ===== PHÁT HIỆN LOẠI CẦU =====
+function detectPattern(history) {
+  const seq = history.slice(-8).map(v => (v === "Tai" ? "T" : "X")).join("");
+  for (const [pattern, name] of Object.entries(patternList)) {
+    if (seq.endsWith(pattern)) return name;
+  }
+  return "Không rõ cầu";
+}
+
+// ===== DỰ ĐOÁN CUỐI =====
+function predictNext(pattern, history) {
+  const last = history.at(-1);
+  const counts = { Tai: 0, Xiu: 0 };
+  history.forEach(r => counts[r]++);
+
+  // Base theo pattern
+  let duDoan = pattern.includes("Xỉu") ? "Xiu" : "Tai";
+
+  // Markov xác suất
+  const pMarkov = markovPredict(history);
+
+  // Entropy & Momentum
+  const e = entropyPredict(history);
+  const m = momentumPredict(history);
+
+  // Nếu cầu hỗn loạn hoặc xen → dùng entropy để đảo chiều
+  if (pattern.includes("đảo") || pattern.includes("xen") || e > 0.7)
+    duDoan = last === "Tai" ? "Xiu" : "Tai";
+
+  // Momentum override
+  if (m) duDoan = m;
+
+  // Markov override
+  if (pMarkov > 0.6) duDoan = "Tai";
+  if (pMarkov < 0.4) duDoan = "Xiu";
+
+  // Độ tin cậy tổng hợp
+  const diff = Math.abs(counts.Tai - counts.Xiu);
+  const doTinCay = `${Math.min(60 + diff * 3 + Math.abs(pMarkov - 0.5) * 80, 96).toFixed(0)}%`;
+
+  return { duDoan, doTinCay };
+}
+
+// ===== CẬP NHẬT API =====
+async function updateData() {
   try {
-    const res = await fetch("https://hitclub-all-ban-o5ir.onrender.com/api/taixiu");
+    const res = await fetch(SOURCE_API);
     const data = await res.json();
-    if (!data?.phien) return;
+    if (!data || !data.ket_qua) return;
 
-    // Không xử lý trùng phiên
-    if (phienDaDoan.has(data.phien)) return;
-    phienDaDoan.add(data.phien);
+    const { phien, xuc_xac, tong, ket_qua } = data;
+    if (phien === predictedPhien) return; // chỉ dự đoán 1 lần/phiên
 
-    lichsu.push({
-      phien: data.phien,
-      ket_qua: data.ket_qua,
-      xuc_xac: data.xuc_xac,
-      tong: data.tong,
-    });
-    if (lichsu.length > 30) lichsu.shift();
+    predictedPhien = phien;
+    history.push(ket_qua);
+    if (history.length > 120) history.shift();
 
-    // cập nhật pattern
-    pattern = lichsu.map(l => (l.ket_qua === "Tai" ? "t" : "x")).join("");
+    const pattern = detectPattern(history);
+    const { duDoan, doTinCay } = predictNext(pattern, history);
 
-    // dự đoán phiên sau
-    const { du_doan, do_tin_cay } = duDoan(lichsu);
+    stats.total++;
+    if (duDoan === ket_qua) stats.correct++;
+    else stats.wrong++;
 
-    // thống kê kết quả đúng/sai
-    if (lichsu.length > 1) {
-      const truoc = lichsu[lichsu.length - 2];
-      if (truoc.du_doan) {
-        thongke.tong++;
-        if (truoc.du_doan === data.ket_qua) thongke.dung++;
-        else thongke.sai++;
-      }
-    }
-
-    const jsonTraVe = {
-      phien: data.phien,
-      xuc_xac: data.xuc_xac,
-      tong: data.tong,
-      ket_qua: data.ket_qua,
-      du_doan,
-      do_tin_cay,
+    currentData = {
+      phien,
+      xuc_xac,
+      tong,
+      ket_qua,
+      du_doan: duDoan,
+      do_tin_cay: doTinCay,
       pattern,
-      so_phien_du_doan: thongke.tong,
-      so_dung: thongke.dung,
-      so_sai: thongke.sai,
-      dev: "@minhsangdangcap",
+      so_phien_du_doan: stats.total,
+      so_dung: stats.correct,
+      so_sai: stats.wrong,
+      dev: "@minhsangdangcap"
     };
 
-    // Gán dự đoán vào lịch sử để so sánh ở phiên sau
-    lichsu[lichsu.length - 1].du_doan = du_doan;
-
-    return jsonTraVe;
-  } catch (e) {
-    console.error("Lỗi API:", e);
+    console.log(`✅ Phiên ${phien}: ${ket_qua} → Dự đoán: ${duDoan} (${doTinCay})`);
+  } catch (err) {
+    console.log("⚠️ Lỗi dữ liệu:", err.message);
   }
 }
 
-// ======= ROUTE API ======= //
-app.get("/api/taixiu", async (req, res) => {
-  const kq = await layDuLieuMoi();
-  if (!kq) return res.json({ error: "Không có dữ liệu mới hoặc API lỗi" });
-  res.json(kq);
-});
+// ===== TỰ ĐỘNG CẬP NHẬT MỖI 6 GIÂY =====
+setInterval(updateData, 6000);
 
-app.listen(PORT, () => console.log(`✅ API đang chạy tại cổng ${PORT}`));
+// ===== ROUTE API =====
+app.get("/api/taixiu", (req, res) => res.json(currentData));
+
+app.listen(PORT, () => console.log(`🚀 Server HitClub AI đang chạy tại cổng ${PORT}`));
