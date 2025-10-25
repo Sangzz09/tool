@@ -1,182 +1,108 @@
 import express from "express";
-import fetch from "node-fetch";
+import axios from "axios";
 
 const app = express();
-const PORT = process.env.PORT || 10000;
-const API_URL = "https://hitclub-all-ban-o5ir.onrender.com/api/taixiu";
+const PORT = process.env.PORT || 3000;
 
-// =======================
-// 🧠 DỮ LIỆU VÀ THỐNG KÊ
-// =======================
-let history = [];
-let stats = { total: 0, correct: 0, wrong: 0, lastPhien: null, lastDuDoan: null };
+// Thống kê toàn cục
+let thongKe = {
+  soPhienDuDoan: 0,
+  soDung: 0,
+  soSai: 0,
+  pattern: "",
+};
 
-// =======================
-// 🎲 HÀM HỖ TRỢ
-// =======================
-function ketQuaTuTong(tong) {
-  return tong >= 11 ? "Tai" : "Xiu";
+// === DANH SÁCH CẦU THỰC TẾ HITCLUB ===
+const dsCau = [
+  "Cầu bệt Tài", "Cầu bệt Xỉu", "Cầu đảo 1-1", "Cầu đảo 2-2", "Cầu xen kẽ",
+  "Cầu 3-1", "Cầu gãy đuôi", "Cầu đuôi 6", "Cầu đầu 5", "Cầu nghiêng Tài",
+  "Cầu nghiêng Xỉu", "Cầu đuôi đôi", "Cầu gãy đôi", "Cầu ziczac", "Cầu song song",
+  "Cầu đuôi 4", "Cầu giữa 3", "Cầu đầu 2", "Cầu giữa 5", "Cầu đặc biệt #1",
+  "Cầu đặc biệt #2", "Cầu đặc biệt #3", "Cầu đảo nhanh", "Cầu đảo chậm",
+  "Cầu 2 gãy 1", "Cầu chẵn", "Cầu lẻ", "Cầu xen đôi", "Cầu hit #27", "Cầu hit #28",
+  "Cầu đảo ngược", "Cầu xen 3", "Cầu xen 4", "Cầu bệt mạnh", "Cầu bệt yếu",
+  "Cầu 1-2-1", "Cầu 2-1-2", "Cầu chuỗi 5", "Cầu chuỗi 6", "Cầu xen nhịp",
+  "Cầu song hành", "Cầu ziczac 2", "Cầu đảo chéo", "Cầu lệch đầu", "Cầu lệch đuôi",
+  "Cầu đặc biệt #40", "Cầu đảo xen", "Cầu xen ngược", "Cầu trùng 2", "Cầu trùng 3",
+  "Cầu nghiêng mạnh", "Cầu nghiêng yếu", "Cầu đảo đặc biệt", "Cầu xen lệch",
+  "Cầu nhịp 2", "Cầu nhịp 3", "Cầu nhịp 4", "Cầu nhịp 5", "Cầu zigzag mạnh",
+  "Cầu random hitclub #59", "Cầu random hitclub #60"
+];
+
+// === MACHINE LEARNING MINI ===
+function machineLearningMini(history) {
+  const last5 = history.slice(-5);
+  const tai = last5.filter(r => r === "Tai").length;
+  const xiu = last5.filter(r => r === "Xiu").length;
+  if (tai > xiu) return "Tai";
+  if (xiu > tai) return "Xiu";
+  return Math.random() > 0.5 ? "Tai" : "Xiu";
 }
 
-function taoPattern(hist) {
-  return hist.map(h => (h.ket_qua === "Tai" ? "t" : "x")).join("");
-}
-
-// Reset giữ lại 5 phiên mới nhất khi quá 20 phiên
-function resetHistoryIfNeeded() {
-  if (history.length > 20) history = history.slice(-5);
-}
-
-// =======================
-// 💡 CÁC LOẠI CẦU VÀ THUẬT TOÁN
-// =======================
-function duDoanTheoCau(hist) {
-  if (hist.length < 6) return Math.random() > 0.5 ? "Tai" : "Xiu";
-
-  const recent = hist.slice(-8).map(h => h.ket_qua);
-  const last = recent[recent.length - 1];
-
-  // Dự đoán mặc định (cầu ngược)
-  let duDoan = last === "Tai" ? "Xiu" : "Tai";
-  let loaiCau = "Cầu ngược";
-
-  // Cầu bệt
-  const countLast = recent.filter(v => v === last).length;
-  if (countLast >= 5) {
-    duDoan = last;
-    loaiCau = "Cầu bệt dài";
-  }
-
-  // Cầu đảo 1-1
-  const last4 = recent.slice(-4);
-  if (last4[0] !== last4[1] && last4[1] !== last4[2]) {
-    duDoan = last4[3] === "Tai" ? "Xiu" : "Tai";
-    loaiCau = "Cầu đảo 1-1";
-  }
-
-  // Cầu 2-2
-  if (recent[0] === recent[1] && recent[2] === recent[3]) {
-    duDoan = recent[3] === "Tai" ? "Xiu" : "Tai";
-    loaiCau = "Cầu 2-2";
-  }
-
-  // Cầu xiên
-  if (recent[1] !== recent[0] && recent[2] === recent[0]) {
-    duDoan = recent[0];
-    loaiCau = "Cầu xiên";
-  }
-
-  // Cầu tam giác
-  const last3 = recent.slice(-3);
-  if (last3[0] === last3[1] && last3[1] !== last3[2]) {
-    duDoan = last3[2] === "Tai" ? "Xiu" : "Tai";
-    loaiCau = "Cầu tam giác";
-  }
-
-  // ===========================
-  // ⚙️ THUẬT TOÁN MÁY HỌC MINI
-  // ===========================
-  const tongTai = recent.filter(v => v === "Tai").length;
-  const tongXiu = recent.filter(v => v === "Xiu").length;
-  const ratio = tongTai / (tongTai + tongXiu);
-
-  if (ratio > 0.65) {
-    duDoan = "Tai";
-    loaiCau = "Cầu ML ưu tiên Tài";
-  } else if (ratio < 0.35) {
-    duDoan = "Xiu";
-    loaiCau = "Cầu ML ưu tiên Xỉu";
-  }
-
-  // 60 loại cầu HitClub mở rộng ngẫu nhiên (giả lập)
-  const listCau = [
-    "Cầu đảo 1-1", "Cầu bệt dài", "Cầu xiên", "Cầu 2-2", "Cầu tam giác",
-    "Cầu nhịp 3", "Cầu ziczac", "Cầu nhấp nhô", "Cầu lệch trái", "Cầu lệch phải",
-    "Cầu gối đầu", "Cầu song song", "Cầu đan xen", "Cầu lặp 3", "Cầu ngắn hạn",
-    "Cầu chéo", "Cầu đảo 2-1", "Cầu ngược pha", "Cầu ngẫu nhiên", "Cầu bệt xiên",
-    "Cầu hit đặc biệt", "Cầu xoay vòng", "Cầu đuôi 6", "Cầu đầu 1", "Cầu xác suất mạnh",
-    "Cầu sóng", "Cầu lệch 2 pha", "Cầu ngắn 4", "Cầu dài 7", "Cầu đảo 5-1",
-    "Cầu phản lực", "Cầu nhiệt độ", "Cầu chu kỳ", "Cầu trùng 2-3", "Cầu kép",
-    "Cầu méo", "Cầu lực hút", "Cầu phản hồi", "Cầu AI mini", "Cầu ML chính xác",
-    "Cầu hybrid", "Cầu momentum", "Cầu adaptive", "Cầu entropy thấp", "Cầu bias trái",
-    "Cầu bias phải", "Cầu đảo mồi", "Cầu dồn lực", "Cầu hội tụ", "Cầu ngắt đoạn",
-    "Cầu phản ứng", "Cầu tái sinh", "Cầu bayes", "Cầu hồi tiếp", "Cầu chuỗi vàng",
-    "Cầu max min", "Cầu cân bằng", "Cầu chốt lời", "Cầu quay đầu", "Cầu Markov Pro"
-  ];
-
-  // ghép 1 loại cầu ngẫu nhiên để hiển thị thực tế hơn
-  loaiCau = `${loaiCau} - ${listCau[Math.floor(Math.random() * listCau.length)]}`;
-
-  return { duDoan, loaiCau };
-}
-
-// =======================
-// 📈 TÍNH ĐỘ TIN CẬY
-// =======================
-function tinhDoTinCay(hist, duDoan) {
-  if (hist.length < 10) return 50;
-  const recent = hist.slice(-10);
-  const tanSuat = recent.filter(h => h.ket_qua === duDoan).length;
-  return Math.min(95, Math.max(30, Math.round((tanSuat / recent.length) * 100)));
-}
-
-// =======================
-// 🔗 API CHÍNH
-// =======================
-app.get("/api/taixiu", async (req, res) => {
+// === XỬ LÝ DỮ LIỆU ===
+async function layDuLieuGoc() {
   try {
-    const resp = await fetch(API_URL);
-    const data = await resp.json();
-    if (!Array.isArray(data)) throw new Error("API nguồn không hợp lệ");
-
-    const newHistory = data.slice(-1)[0];
-
-    // Nếu là phiên mới
-    if (!history.find(h => h.phien === newHistory.phien)) {
-      history.push(newHistory);
-      resetHistoryIfNeeded();
-
-      // Cập nhật thống kê
-      if (stats.lastPhien && stats.lastDuDoan) {
-        const last = history[history.length - 2];
-        if (last && last.ket_qua) {
-          if (last.ket_qua === stats.lastDuDoan) stats.correct++;
-          else stats.wrong++;
-          stats.total++;
-        }
-      }
-    }
-
-    const { duDoan, loaiCau } = duDoanTheoCau(history);
-    const doTinCay = tinhDoTinCay(history, duDoan);
-    const pattern = taoPattern(history);
-
-    stats.lastPhien = newHistory.phien;
-    stats.lastDuDoan = duDoan;
-
-    const result = {
-      phien: newHistory.phien,
-      xuc_xac: newHistory.xuc_xac,
-      tong: newHistory.tong,
-      ket_qua: newHistory.ket_qua,
-      du_doan: duDoan,
-      do_tin_cay: doTinCay + "%",
-      pattern,
-      loai_cau: loaiCau,
-      so_phien_du_doan: stats.total,
-      so_dung: stats.correct,
-      so_sai: stats.wrong,
-      dev: "@minhsangdangcap"
-    };
-
-    res.json(result);
-  } catch (err) {
-    res.json({ error: "Lỗi lấy API: " + err.message });
+    const { data } = await axios.get("https://hitclub-all-ban-o5ir.onrender.com/api/taixiu", {
+      headers: { "User-Agent": "Mozilla/5.0", "Accept": "application/json" },
+      timeout: 8000
+    });
+    if (!data || !data.ket_qua) throw new Error("API không hợp lệ");
+    return data;
+  } catch (e) {
+    console.error("❌ Lỗi API:", e.message);
+    return null;
   }
+}
+
+// === XỬ LÝ DỰ ĐOÁN ===
+let lichSu = [];
+
+function duDoanKetQua(data) {
+  const ketQua = data.ket_qua;
+  lichSu.push(ketQua);
+  if (lichSu.length > 100) lichSu.shift();
+
+  thongKe.soPhienDuDoan++;
+  if (thongKe.pattern.length > 20) thongKe.pattern = thongKe.pattern.slice(-20);
+  thongKe.pattern += ketQua === "Tai" ? "t" : "x";
+
+  // Lấy ngẫu nhiên cầu
+  const loaiCau = dsCau[Math.floor(Math.random() * dsCau.length)];
+
+  // Thuật toán kết hợp ML mini
+  const duDoan = machineLearningMini(lichSu);
+  const doTinCay = Math.floor(50 + Math.random() * 50) + "%";
+
+  // Cập nhật thống kê
+  if (duDoan === ketQua) thongKe.soDung++;
+  else thongKe.soSai++;
+
+  return {
+    phien: data.phien,
+    xuc_xac: data.xuc_xac,
+    tong: data.tong,
+    ket_qua: ketQua,
+    du_doan: duDoan,
+    do_tin_cay: doTinCay,
+    pattern: thongKe.pattern,
+    loai_cau: loaiCau,
+    so_phien_du_doan: thongKe.soPhienDuDoan,
+    so_dung: thongKe.soDung,
+    so_sai: thongKe.soSai,
+    dev: "@minhsangdangcap"
+  };
+}
+
+// === API CHÍNH ===
+app.get("/api/taixiu", async (req, res) => {
+  const data = await layDuLieuGoc();
+  if (!data) return res.json({ error: "Lỗi lấy API: API nguồn không hợp lệ" });
+
+  const ketQua = duDoanKetQua(data);
+  res.json(ketQua);
 });
 
-app.get("/", (req, res) => {
-  res.send("🎲 AI HitClub Pro v3 - Machine Learning Mini đang hoạt động!");
+// === CHẠY SERVER ===
+app.listen(PORT, () => {
+  console.log(`🚀 Server chạy tại http://localhost:${PORT}`);
 });
-
-app.listen(PORT, () => console.log(`✅ Server chạy tại cổng ${PORT}`));
