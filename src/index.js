@@ -5,17 +5,17 @@ import fs from "fs";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const FILE_LICH_SU = "./lichsu.json";
+const FILE_DATA = "./data.json";
 
-// === THỐNG KÊ TOÀN CỤC ===
+// ====== THỐNG KÊ ======
 let thongKe = {
   soPhienDuDoan: 0,
   soDung: 0,
   soSai: 0,
-  pattern: "",
+  pattern: ""
 };
 
-// === DANH SÁCH 60 LOẠI CẦU HITCLUB ===
+// ====== DANH SÁCH 60 LOẠI CẦU HITCLUB ======
 const dsCau = [
   "Cầu bệt Tài", "Cầu bệt Xỉu", "Cầu đảo 1-1", "Cầu đảo 2-2", "Cầu xen kẽ",
   "Cầu 3-1", "Cầu gãy đuôi", "Cầu đuôi 6", "Cầu đầu 5", "Cầu nghiêng Tài",
@@ -32,24 +32,23 @@ const dsCau = [
   "Cầu random hitclub #59", "Cầu random hitclub #60"
 ];
 
-// === LỊCH SỬ ===
+// ====== LỊCH SỬ ======
 let lichSu = [];
 
-// Load lịch sử từ file nếu có
+// Load data từ file JSON nếu có
 try {
-  if (fs.existsSync(FILE_LICH_SU)) {
-    lichSu = JSON.parse(fs.readFileSync(FILE_LICH_SU, "utf8"));
-    // Cập nhật thống kê từ lịch sử
+  if (fs.existsSync(FILE_DATA)) {
+    lichSu = JSON.parse(fs.readFileSync(FILE_DATA, "utf8"));
     thongKe.soPhienDuDoan = lichSu.length;
     thongKe.soDung = lichSu.filter(r => r.duDoan === r.ketQua).length;
     thongKe.soSai = lichSu.filter(r => r.duDoan !== r.ketQua).length;
     thongKe.pattern = lichSu.map(r => (r.ketQua === "Tai" ? "t" : "x")).join("");
   }
 } catch (err) {
-  console.error("❌ Lỗi load lichsu.json:", err.message);
+  console.error("❌ Lỗi load data.json:", err.message);
 }
 
-// === MACHINE LEARNING MINI ===
+// ====== MACHINE LEARNING MINI ======
 function machineLearningMini(history) {
   const last5 = history.slice(-5).map(r => r.ketQua);
   const tai = last5.filter(r => r === "Tai").length;
@@ -59,18 +58,7 @@ function machineLearningMini(history) {
   return Math.random() > 0.5 ? "Tai" : "Xiu";
 }
 
-// === DỰ ĐOÁN THÔNG MINH ===
-function duDoanThongMinh() {
-  if (lichSu.length < 5) return machineLearningMini(lichSu);
-  const last5Pattern = lichSu.slice(-5).map(r => r.ketQua).join("");
-  const taiCount = (last5Pattern.match(/Tai/g) || []).length;
-  const xiuCount = (last5Pattern.match(/Xiu/g) || []).length;
-  if (taiCount > xiuCount) return "Tai";
-  if (xiuCount > taiCount) return "Xiu";
-  return Math.random() > 0.5 ? "Tai" : "Xiu";
-}
-
-// === LẤY DỮ LIỆU GỐC TỪ API HITCLUB ===
+// ====== LẤY DỮ LIỆU GỐC TỪ API ======
 async function layDuLieuGoc() {
   try {
     const { data } = await axios.get("https://hitclub-all-ban-o5ir.onrender.com/api/taixiu", {
@@ -85,48 +73,42 @@ async function layDuLieuGoc() {
   }
 }
 
-// === CẬP NHẬT LỊCH SỬ & FILE ===
-function capNhatLichSu(ketQua, duDoan) {
-  const phienMoi = {
-    ketQua,
-    duDoan,
+// ====== CẬP NHẬT LỊCH SỬ & FILE JSON ======
+function capNhatLichSu(ketQua, duDoan, data) {
+  const item = {
+    phien: data.phien,
+    xuc_xac: data.xuc_xac,
+    tong: data.tong,
+    ket_qua: ketQua,
+    duDoan: duDoan,
+    loaiCau: dsCau[Math.floor(Math.random() * dsCau.length)],
     thoiGian: new Date().toISOString()
   };
-  lichSu.push(phienMoi);
+
+  lichSu.push(item);
 
   // Reset tự động khi >20 phiên, giữ 5 phiên gần nhất
-  if (lichSu.length > 20) {
-    lichSu = lichSu.slice(-5);
-    thongKe.soPhienDuDoan = 5;
-    thongKe.soDung = lichSu.filter(r => r.duDoan === r.ketQua).length;
-    thongKe.soSai = lichSu.filter(r => r.duDoan !== r.ketQua).length;
-    thongKe.pattern = lichSu.map(r => (r.ketQua === "Tai" ? "t" : "x")).join("");
-  }
-
-  // Lưu file JSON
-  fs.writeFile(FILE_LICH_SU, JSON.stringify(lichSu, null, 2), err => {
-    if (err) console.error("❌ Lỗi ghi lichsu.json:", err.message);
-  });
-}
-
-// === XỬ LÝ DỰ ĐOÁN ===
-function duDoanKetQua(data) {
-  const ketQua = data.ket_qua;
-  const duDoan = duDoanThongMinh();
+  if (lichSu.length > 20) lichSu = lichSu.slice(-5);
 
   // Cập nhật thống kê
-  thongKe.soPhienDuDoan++;
-  if (thongKe.pattern.length > 20) thongKe.pattern = thongKe.pattern.slice(-20);
-  thongKe.pattern += ketQua === "Tai" ? "t" : "x";
-  if (duDoan === ketQua) thongKe.soDung++;
-  else thongKe.soSai++;
+  thongKe.soPhienDuDoan = lichSu.length;
+  thongKe.soDung = lichSu.filter(r => r.duDoan === r.ket_qua).length;
+  thongKe.soSai = lichSu.filter(r => r.duDoan !== r.ket_qua).length;
+  thongKe.pattern = lichSu.map(r => (r.ket_qua === "Tai" ? "t" : "x")).join("");
 
-  // Chọn cầu ngẫu nhiên
-  const loaiCau = dsCau[Math.floor(Math.random() * dsCau.length)];
+  // Ghi file JSON
+  fs.writeFileSync(FILE_DATA, JSON.stringify(lichSu, null, 2));
+}
+
+// ====== XỬ LÝ DỰ ĐOÁN ======
+function duDoanKetQua(data) {
+  const ketQua = data.ket_qua;
+  const duDoan = machineLearningMini(lichSu);
+
+  capNhatLichSu(ketQua, duDoan, data);
+
   const doTinCay = Math.floor(50 + Math.random() * 50) + "%";
-
-  // Cập nhật lịch sử + file
-  capNhatLichSu(ketQua, duDoan);
+  const loaiCau = dsCau[Math.floor(Math.random() * dsCau.length)];
 
   return {
     phien: data.phien,
@@ -144,28 +126,25 @@ function duDoanKetQua(data) {
   };
 }
 
-// === API: DỰ ĐOÁN TÀI/XỈU ===
+// ====== API ======
 app.get("/api/taixiu", async (req, res) => {
   const data = await layDuLieuGoc();
-  if (!data) return res.json({ error: "Lỗi lấy API: API nguồn không hợp lệ" });
+  if (!data) return res.json({ error: "Lỗi lấy API nguồn không hợp lệ" });
 
   const ketQua = duDoanKetQua(data);
   res.json(ketQua);
 });
 
-// === API: LẤY TOÀN BỘ LỊCH SỬ ===
+// Xem toàn bộ lịch sử
 app.get("/api/lichsu", (req, res) => {
-  res.json({
-    tongPhien: lichSu.length,
-    lichSu
-  });
+  res.json({ tongPhien: lichSu.length, lichSu });
 });
 
-// === XỬ LÝ LỖI GLOBAL ===
+// ====== XỬ LÝ LỖI ======
 process.on("unhandledRejection", err => console.error("Unhandled Rejection:", err));
 process.on("uncaughtException", err => console.error("Uncaught Exception:", err));
 
-// === CHẠY SERVER ===
+// ====== CHẠY SERVER ======
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Server chạy tại http://localhost:${PORT}`);
 });
