@@ -1,10 +1,13 @@
+// index.js
 import express from "express";
 import axios from "axios";
+import fs from "fs";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const FILE_LICH_SU = "./lichsu.json";
 
-// Thống kê toàn cục
+// === THỐNG KÊ TOÀN CỤC ===
 let thongKe = {
   soPhienDuDoan: 0,
   soDung: 0,
@@ -12,7 +15,7 @@ let thongKe = {
   pattern: "",
 };
 
-// === DANH SÁCH CẦU THỰC TẾ HITCLUB ===
+// === DANH SÁCH 60 LOẠI CẦU HITCLUB ===
 const dsCau = [
   "Cầu bệt Tài", "Cầu bệt Xỉu", "Cầu đảo 1-1", "Cầu đảo 2-2", "Cầu xen kẽ",
   "Cầu 3-1", "Cầu gãy đuôi", "Cầu đuôi 6", "Cầu đầu 5", "Cầu nghiêng Tài",
@@ -29,9 +32,26 @@ const dsCau = [
   "Cầu random hitclub #59", "Cầu random hitclub #60"
 ];
 
+// === LỊCH SỬ ===
+let lichSu = [];
+
+// Load lịch sử từ file nếu có
+try {
+  if (fs.existsSync(FILE_LICH_SU)) {
+    lichSu = JSON.parse(fs.readFileSync(FILE_LICH_SU, "utf8"));
+    // Cập nhật thống kê từ lịch sử
+    thongKe.soPhienDuDoan = lichSu.length;
+    thongKe.soDung = lichSu.filter(r => r.duDoan === r.ketQua).length;
+    thongKe.soSai = lichSu.filter(r => r.duDoan !== r.ketQua).length;
+    thongKe.pattern = lichSu.map(r => (r.ketQua === "Tai" ? "t" : "x")).join("");
+  }
+} catch (err) {
+  console.error("❌ Lỗi load lichsu.json:", err.message);
+}
+
 // === MACHINE LEARNING MINI ===
 function machineLearningMini(history) {
-  const last5 = history.slice(-5);
+  const last5 = history.slice(-5).map(r => r.ketQua);
   const tai = last5.filter(r => r === "Tai").length;
   const xiu = last5.filter(r => r === "Xiu").length;
   if (tai > xiu) return "Tai";
@@ -39,7 +59,18 @@ function machineLearningMini(history) {
   return Math.random() > 0.5 ? "Tai" : "Xiu";
 }
 
-// === XỬ LÝ DỮ LIỆU ===
+// === DỰ ĐOÁN THÔNG MINH ===
+function duDoanThongMinh() {
+  if (lichSu.length < 5) return machineLearningMini(lichSu);
+  const last5Pattern = lichSu.slice(-5).map(r => r.ketQua).join("");
+  const taiCount = (last5Pattern.match(/Tai/g) || []).length;
+  const xiuCount = (last5Pattern.match(/Xiu/g) || []).length;
+  if (taiCount > xiuCount) return "Tai";
+  if (xiuCount > taiCount) return "Xiu";
+  return Math.random() > 0.5 ? "Tai" : "Xiu";
+}
+
+// === LẤY DỮ LIỆU GỐC TỪ API HITCLUB ===
 async function layDuLieuGoc() {
   try {
     const { data } = await axios.get("https://hitclub-all-ban-o5ir.onrender.com/api/taixiu", {
@@ -54,28 +85,48 @@ async function layDuLieuGoc() {
   }
 }
 
-// === XỬ LÝ DỰ ĐOÁN ===
-let lichSu = [];
+// === CẬP NHẬT LỊCH SỬ & FILE ===
+function capNhatLichSu(ketQua, duDoan) {
+  const phienMoi = {
+    ketQua,
+    duDoan,
+    thoiGian: new Date().toISOString()
+  };
+  lichSu.push(phienMoi);
 
+  // Reset tự động khi >20 phiên, giữ 5 phiên gần nhất
+  if (lichSu.length > 20) {
+    lichSu = lichSu.slice(-5);
+    thongKe.soPhienDuDoan = 5;
+    thongKe.soDung = lichSu.filter(r => r.duDoan === r.ketQua).length;
+    thongKe.soSai = lichSu.filter(r => r.duDoan !== r.ketQua).length;
+    thongKe.pattern = lichSu.map(r => (r.ketQua === "Tai" ? "t" : "x")).join("");
+  }
+
+  // Lưu file JSON
+  fs.writeFile(FILE_LICH_SU, JSON.stringify(lichSu, null, 2), err => {
+    if (err) console.error("❌ Lỗi ghi lichsu.json:", err.message);
+  });
+}
+
+// === XỬ LÝ DỰ ĐOÁN ===
 function duDoanKetQua(data) {
   const ketQua = data.ket_qua;
-  lichSu.push(ketQua);
-  if (lichSu.length > 100) lichSu.shift();
+  const duDoan = duDoanThongMinh();
 
+  // Cập nhật thống kê
   thongKe.soPhienDuDoan++;
   if (thongKe.pattern.length > 20) thongKe.pattern = thongKe.pattern.slice(-20);
   thongKe.pattern += ketQua === "Tai" ? "t" : "x";
-
-  // Lấy ngẫu nhiên cầu
-  const loaiCau = dsCau[Math.floor(Math.random() * dsCau.length)];
-
-  // Thuật toán kết hợp ML mini
-  const duDoan = machineLearningMini(lichSu);
-  const doTinCay = Math.floor(50 + Math.random() * 50) + "%";
-
-  // Cập nhật thống kê
   if (duDoan === ketQua) thongKe.soDung++;
   else thongKe.soSai++;
+
+  // Chọn cầu ngẫu nhiên
+  const loaiCau = dsCau[Math.floor(Math.random() * dsCau.length)];
+  const doTinCay = Math.floor(50 + Math.random() * 50) + "%";
+
+  // Cập nhật lịch sử + file
+  capNhatLichSu(ketQua, duDoan);
 
   return {
     phien: data.phien,
@@ -93,7 +144,7 @@ function duDoanKetQua(data) {
   };
 }
 
-// === API CHÍNH ===
+// === API: DỰ ĐOÁN TÀI/XỈU ===
 app.get("/api/taixiu", async (req, res) => {
   const data = await layDuLieuGoc();
   if (!data) return res.json({ error: "Lỗi lấy API: API nguồn không hợp lệ" });
@@ -102,7 +153,19 @@ app.get("/api/taixiu", async (req, res) => {
   res.json(ketQua);
 });
 
+// === API: LẤY TOÀN BỘ LỊCH SỬ ===
+app.get("/api/lichsu", (req, res) => {
+  res.json({
+    tongPhien: lichSu.length,
+    lichSu
+  });
+});
+
+// === XỬ LÝ LỖI GLOBAL ===
+process.on("unhandledRejection", err => console.error("Unhandled Rejection:", err));
+process.on("uncaughtException", err => console.error("Uncaught Exception:", err));
+
 // === CHẠY SERVER ===
-app.listen(PORT, () => {
+app.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Server chạy tại http://localhost:${PORT}`);
 });
